@@ -3,6 +3,7 @@
 #include "mrt.hpp"
 
 #include <linux/mroute.h>
+#include <linux/mroute6.h>
 #include <linux/igmp.h>
 #include <netinet/igmp.h>
 #include <arpa/inet.h>
@@ -23,21 +24,59 @@ string inet_intoa(uint32_t addr)
 	return string(inet_ntoa(inAddr));
 }
 
-MRTctrl::MRTctrl() try
-: parent_("eth0")
-, mrtSock_(-1)
-, igmpSock_(-1)
+MRTctrl::MRTctrl()
+	: parent_("eth0")
+	, mrtSock_(-1)
+	, igmpSock_(-1)
+{
+	initMRT();
+	initVIFs();
+	initIGMP();
+}
+
+MRTctrl::~MRTctrl()
+{
+	// clear virtual multicast interfaces
+	for (vifi_t vifi(0), maxvifs(vifs_.size()); vifi < maxvifs; ++vifi)
+		setsockopt(mrtSock_, IPPROTO_IP, MRT_DEL_VIF, &vifi, sizeof(vifi));
+	int enable(0); // disable multicast forwarding in the kernel
+	if (setsockopt(mrtSock_, IPPROTO_IP, MRT_DONE, &enable, sizeof(enable)) < 0)
+		throw("Close mrouted socket error");
+	if (setsockopt(mrt6Sock_, IPPROTO_IPV6, MRT6_DONE, &enable, sizeof(enable)) < 0)
+		throw("Close mrouted socket error");
+	close(mrtSock_);
+	close(mrt6Sock_);
+}
+
+void MRTctrl::initMRT()
 {
 	mrtSock_ = socket(AF_INET, SOCK_RAW, IPPROTO_IGMP);
+	if (-1 == mrtSock_)
+		throw("Open mrouted raw socket error.");
+	mrt6Sock_ = socket(AF_INET6, SOCK_RAW, IPPROTO_ICMPV6);
+	if (-1 == mrt6Sock_)
+		throw("Open mrouted IPv6 raw socket error.");
 	int enable (1);
 	if (setsockopt(mrtSock_, IPPROTO_IP, MRT_INIT, &enable, sizeof(enable)) < 0)
-		throw("Enable multicast forwarding error. Another mrouted instance may be running already.");
+		throw("Enable multicast forwarding error.");
+	if (setsockopt(mrt6Sock_, IPPROTO_IPV6, MRT6_INIT, &enable, sizeof(enable)) < 0)
+		throw("Enable IPv6 multicast forwarding error.");
+}
+
+void MRTctrl::initVIFs()
+{
+	// IPv4
 	struct vifctl vc;
 	bzero(&vc, sizeof(vc));
 	//	vc.vifc_flags |= VIFF_REGISTER;
 	vc.vifc_flags = 0;
 	vc.vifc_threshold = 1;
 	vc.vifc_rate_limit = 0;
+	// IPv6
+	struct mif6ctl mc;
+	bzero(&mc, sizeof(mc));
+	mc.mif6c_flags = 0;
+	
 	// get the list of network interfaces
 	struct ifaddrs *ifaddr;
 	if (getifaddrs(&ifaddr) < 0)
@@ -56,11 +95,21 @@ MRTctrl::MRTctrl() try
 			memcpy(&vc.vifc_lcl_addr, &addr, sizeof(vc.vifc_lcl_addr));
 			if (setsockopt(mrtSock_, IPPROTO_IP, MRT_ADD_VIF, &vc, sizeof(vc)) < 0)
 				continue;
-			vifs_[ifa->ifa_name] = vifi;
-			++vifi;
 		}
+		else if (AF_INET6 == ifa->ifa_addr->sa_family) {
+			mc.mif6c_mifi = vifi;
+			mc.mif6c_pifi = pif_index;
+			setsockopt(mrt6Sock_, IPPROTO_IPV6, MRT6_ADD_MIF, (void *)&mc, sizeof(mc));
+		}
+		vifs_[ifa->ifa_name] = vifi;
+		++vifi;
 	}
-//	sleep(20);
+	freeifaddrs(ifaddr);
+}
+
+void MRTctrl::initIGMP()
+{
+	//	sleep(20);
 	struct sockaddr_in uplink;
 	bzero(&uplink, sizeof(uplink));
 	uplink.sin_family = AF_INET;
@@ -70,23 +119,8 @@ MRTctrl::MRTctrl() try
 	if (bind(igmpSock_, (struct sockaddr *)&uplink, sizeof(uplink)) < 0)
 		throw("Open IGMP socket error.");
 }
-catch(char const* e)
-{
-	cerr << e <<endl;
-}
 
-MRTctrl::~MRTctrl()
-{
-	// clear virtual multicast interfaces
-	for (vifi_t vifi(0), maxvifs(vifs_.size()); vifi < maxvifs; ++vifi)
-		setsockopt(mrtSock_, IPPROTO_IP, MRT_DEL_VIF, &vifi, sizeof(vifi));
-	int enable(0); // disable multicast forwarding in the kernel
-	if (setsockopt(mrtSock_, IPPROTO_IP, MRT_DONE, &enable, sizeof(enable)) < 0)
-		throw("Close mrouted socket error");
-	close(mrtSock_);
-}
-
-void MRTctrl::AddMFC(const string& parent, uint32_t origin, uint32_t mcastgrp)
+void MRTctrl::AddMFC(const string & parent, uint32_t origin, uint32_t mcastgrp)
 {
 	if (!insert_uniq<uint32_t,uint32_t>(mfcs_, MFC::value_type(mcastgrp, origin)))
 		return;
@@ -100,10 +134,10 @@ void MRTctrl::AddMFC(const string& parent, uint32_t origin, uint32_t mcastgrp)
 			mc.mfcc_ttls[vifi] = 2;
 	if (setsockopt(mrtSock_, IPPROTO_IP, MRT_ADD_MFC, &mc, sizeof(mc)) < 0)
 		throw("Add multicast route error");
-	std::cout <<"added mroute (" << inet_intoa(origin)  <<"," << inet_intoa(mcastgrp) <<")" <<std::endl;
+	std::cout <<"added (" << inet_intoa(origin)  <<"," << inet_intoa(mcastgrp) <<")" <<std::endl;
 }
 
-void MRTctrl::DeleteMFC(const string& parent, uint32_t origin, uint32_t mcastgrp)
+void MRTctrl::DeleteMFC(const string & parent, uint32_t origin, uint32_t mcastgrp)
 {
 	MFC::iterator mfc = find_pair<uint32_t,uint32_t>(mfcs_, MFC::value_type(mcastgrp, origin));
 	if (mfcs_.end() == mfc)
@@ -118,10 +152,10 @@ void MRTctrl::DeleteMFC(const string& parent, uint32_t origin, uint32_t mcastgrp
 		mc.mfcc_ttls[vifi] = 0;
 	if (setsockopt(mrtSock_, IPPROTO_IP, MRT_DEL_MFC, &mc, sizeof(mc)) < 0)
 		throw("Delete multicast route error");
-	std::cout <<"deleted mroute (" << inet_intoa(origin)  <<"," << inet_intoa(mcastgrp) <<")" <<std::endl;
+	std::cout <<"deleted (" << inet_intoa(origin)  <<"," << inet_intoa(mcastgrp) <<")" <<std::endl;
 }
 
-void MRTctrl::DeleteMFC(const string& parent, uint32_t mcastgrp)
+void MRTctrl::DeleteMFC(const string & parent, uint32_t mcastgrp)
 {
 	std::pair<MFC::iterator, MFC::iterator> origins = mfcs_.equal_range(mcastgrp);
 	for (MFC::iterator it(origins.first); it != origins.second; ++it) {
@@ -134,7 +168,7 @@ void MRTctrl::DeleteMFC(const string& parent, uint32_t mcastgrp)
 			mc.mfcc_ttls[vifi] = 0;
 		if (setsockopt(mrtSock_, IPPROTO_IP, MRT_DEL_MFC, &mc, sizeof(mc)) < 0)
 			throw("Delete multicast route error");
-		std::cout <<"deleted mroute (" << inet_intoa(it->second)  <<"," << inet_intoa(mcastgrp) <<")" <<std::endl;
+		std::cout <<"deleted (" << inet_intoa(it->second)  <<"," << inet_intoa(mcastgrp) <<")" <<std::endl;
 	}
 	mfcs_.erase(mcastgrp);
 }
@@ -209,7 +243,7 @@ void MRTctrl::handleIGMP(int igmpSock) try
 		cerr << "ignoring unknown IGMP message type " << igmpv3->type <<endl;
 	}
 }
-catch(exception& e)
+catch(exception & e)
 {
 	cerr << e.what() <<endl;
 }
@@ -230,7 +264,7 @@ catch(char const*e)
 {
 	cerr << e <<endl;
 }
-catch(exception& e)
+catch(exception & e)
 {
 	cerr << e.what() <<endl;
 }

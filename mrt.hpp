@@ -99,6 +99,10 @@ public:
 	 */
 	void handleMcastData(int mrtSock);
 
+	void initMRT();
+	void initVIFs();
+	void initIGMP();
+
 protected:
 	// default network interface where the multicast data arrive
 	std::string parent_;
@@ -110,7 +114,7 @@ private:
 	typedef std::multimap<uint32_t, uint32_t> MFC;
 	MFC mfcs_;
 	// Virtual interfaces
-	typedef std::map<std::string, int> Vif;
+	typedef std::map<std::string, std::pair<int,int>> Vif;
 	Vif vifs_;
 	// Proxy sockets forwarding IGMP reports to uplink
 	typedef std::map<uint32_t, int> ForwardSock;
@@ -119,6 +123,7 @@ private:
 	in_addr iifAddr_;
 	// Raw socket to control linux system MRT
 	int mrtSock_;
+	int mrt6Sock_;
 	// Raw socket to receive IGMP membership reports
 	int igmpSock_;
 };

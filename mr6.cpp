@@ -30,7 +30,7 @@ catch(const char* s)
 {
 	std::cerr << s <<std::endl;
 }
-catch(std::exception& e)
+catch(std::exception & e)
 {
 	std::cerr << e.what() <<std::endl;
 }
