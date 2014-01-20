@@ -3,6 +3,7 @@
 #include <inttypes.h>
 #include <map>
 #include <string>
+#include <vector>
 #include <cstring>
 #include <netinet/ip.h>
 
@@ -43,12 +44,14 @@ public:
 	 * @brief getMtrSock provides socket fd to control MRT
 	 * @return file descriptor
 	 */
-	int getMrtSock() { return mrtSock_; }
+	int getMrt4Sock() { return mrt4Sock_; }
+	int getMrt6Sock() { return mrt6Sock_; }
 	/**
 	 * @brief getIgmpSock provides socket fd to receive IGMP membership reports
 	 * @return file descriptor
 	 */
-	int getIgmpSock() { return igmpSock_; }
+	int getIgmp4Sock() { return igmp4Sock_; }
+	int getIgmp6Sock() { return igmp6Sock_; }
 	/**
 	 * @brief delete multicast route from MFC
 	 *
@@ -99,6 +102,7 @@ public:
 	 */
 	void handleMcastData(int mrtSock);
 
+	void init();
 	void initMRT();
 	void initVIFs();
 	void initIGMP();
@@ -114,16 +118,18 @@ private:
 	typedef std::multimap<uint32_t, uint32_t> MFC;
 	MFC mfcs_;
 	// Virtual interfaces
-	typedef std::map<std::string, std::pair<int,int>> Vif;
+	typedef std::vector<std::pair<std::string, u_int16_t> > Vif;
 	Vif vifs_;
 	// Proxy sockets forwarding IGMP reports to uplink
 	typedef std::map<uint32_t, int> ForwardSock;
 	ForwardSock msockets_;
 	// Uplink interface address
-	in_addr iifAddr_;
+	in_addr iifAddr4_;
+	in6_addr iifAddr6_;
 	// Raw socket to control linux system MRT
-	int mrtSock_;
+	int mrt4Sock_;
 	int mrt6Sock_;
 	// Raw socket to receive IGMP membership reports
-	int igmpSock_;
+	int igmp4Sock_;
+	int igmp6Sock_;
 };

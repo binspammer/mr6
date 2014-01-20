@@ -8,13 +8,18 @@
 int main(int argc, char* argv[])
 try {
 	MRTctrl mrtd;
-	struct pollfd pfd[3];
+	mrtd.init();
+	struct pollfd pfd[5];
 
 	for(;;) {
-		pfd[0].fd = mrtd.getMrtSock();
+		pfd[0].fd = mrtd.getMrt4Sock();
 		pfd[0].events = POLLIN;
-		pfd[1].fd = mrtd.getIgmpSock();
+		pfd[1].fd = mrtd.getMrt6Sock();
 		pfd[1].events = POLLIN;
+		pfd[2].fd = mrtd.getIgmp4Sock();
+		pfd[2].events = POLLIN;
+		pfd[3].fd = mrtd.getIgmp6Sock();
+		pfd[3].events = POLLIN;
 
 		int ret =  poll(pfd, 2, -1);
 		if (-1 == ret)
